@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(
     page_title="수주 자동화 시스템",
     layout="wide", # 이 부분이 화면을 넓게 만들어줍니다
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded" )
 
 # --- [날짜 변환 함수: 센터입하일자 전용] ---
 def format_delivery_date(val):
