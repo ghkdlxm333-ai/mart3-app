@@ -4,7 +4,7 @@ import io
 from datetime import datetime
 
 # 1. 화면 설정
-st.set_page_config(page_title="이마트 계열 수주 자동화", layout="wide")
+st.set_page_config(page_title="이마트 계열 수주 자동화", page_icon="🟢", layout="wide")
 
 # --- [날짜 변환 함수: YYYYMMDD 강제 고정] ---
 def format_delivery_date(val):
@@ -59,7 +59,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒 통합 수주 자동화 (NB 채널 확장)")
+st.title("🛒🟢 통합 수주 자동화 ")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
