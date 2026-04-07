@@ -1,34 +1,99 @@
-# ... (상단 로직 동일)
+import streamlit as st
+import pandas as pd
+import io
+from datetime import datetime
 
-    for _, row in df_raw.iterrows():
-        # 컬럼 존재 여부 확인 (에러 방지)
-        store_raw = str(row.get('점포명', '알수없음'))
+# 1. 화면 설정 (맨 위로 이동)
+st.set_page_config(page_title="통합 수주 관리 시스템", layout="wide")
+
+def format_delivery_date(val):
+    if pd.isna(val) or str(val).strip() == "":
+        return datetime.now().strftime('%Y%m%d')
+    try:
+        dt = pd.to_datetime(val)
+        return dt.strftime('%Y%m%d')
+    except:
+        clean_val = ''.join(filter(str.isdigit, str(val)))
+        return clean_val[:8] if len(clean_val) >= 8 else datetime.now().strftime('%Y%m%d')
+
+@st.cache_data
+def load_master_data(file_path):
+    try:
+        xls = pd.ExcelFile(file_path)
+        sheet_map = {s.strip(): s for s in xls.sheet_names}
         
-        if 'TR' in store_raw.upper(): ch = 'TRADERS'
-        elif 'NBR' in store_raw.upper(): ch = 'NOBRAND'
-        else: ch = 'EMART'
+        # 배송코드 매핑 로드
+        df_center = pd.read_excel(xls, sheet_name=sheet_map.get('배송코드'), dtype=str)
+        for i, row in df_center.iterrows():
+            if '배송코드' in [str(v).strip() for v in row.values]:
+                df_center = pd.read_excel(xls, sheet_name=sheet_map.get('배송코드'), skiprows=i+1, dtype=str)
+                df_center.columns = [str(c).strip() for c in pd.read_excel(xls, sheet_name=sheet_map.get('배송코드'), nrows=i+1).iloc[i]]
+                break
+        
+        c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
+        b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip()))
+        
+        # 제품명 매핑 로드
+        df_prod = pd.read_excel(xls, sheet_name=sheet_map.get('제품명'), dtype=str)
+        p_map = dict(zip(df_prod['상품코드'].str.strip(), df_prod['ME코드'].str.strip()))
+        n_map = dict(zip(df_prod['상품코드'].str.strip(), df_prod.iloc[:, 1].str.strip()))
+        
+        return {'c_to_b': c_to_b, 'b_to_n': b_to_n, 'products': p_map, 'names': n_map}, None
+    except Exception as e:
+        return None, str(e)
+
+# --- 채널 정의 ---
+CHANNELS = {
+    'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
+    'NOBRAND': {'name': '노브랜드', 'code': '81010000', 'file': '노브랜드_서식파일_업데이트용.xlsx'},
+    'EMART': {'name': '이마트', 'code': '81010000', 'file': '이마트_서식파일_업데이트용.xlsx'}
+}
+
+st.title("🛒 통합 수주 자동화 시스템")
+
+# 마스터 데이터 미리 로드
+masters = {}
+for k, v in CHANNELS.items():
+    data, err = load_master_data(v['file'])
+    if not err:
+        masters[k] = data
+
+uploaded_file = st.file_uploader("ORDERS 파일 업로드 (엑셀)", type=['xlsx'])
+
+if uploaded_file:
+    df_raw = pd.read_excel(uploaded_file)
+    final_data = []
+
+    # 여기서부터 들여쓰기가 매우 중요합니다
+    for _, row in df_raw.iterrows():
+        store_raw = str(row.get('점포명', ''))
+        
+        # 채널 분류 로직
+        if 'TR' in store_raw.upper():
+            ch = 'TRADERS'
+        elif 'NBR' in store_raw.upper():
+            ch = 'NOBRAND'
+        else:
+            ch = 'EMART'
         
         m = masters.get(ch)
-        if not m: continue
+        if not m:
+            continue
 
-        # 센터입하일자 컬럼을 유연하게 찾기
-        date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c)), None)
-        delivery_date = format_delivery_date(row[date_col]) if date_col else datetime.now().strftime('%Y%m%d')
-
-        # 데이터 매핑 (딕셔너리 키 이름을 group_cols와 반드시 일치시켜야 함)
-        center_code_val = str(row.get('센터코드', '')).strip()
-        d_code = m['c_to_b'].get(center_code_val, "")
+        # 데이터 매핑 및 정리
+        c_code = str(row.get('센터코드', '')).strip()
+        d_code = m['c_to_b'].get(c_code, "")
         d_place = m['b_to_n'].get(d_code, store_raw)
         
-        prod_code_val = str(row.get('상품코드', '')).strip()
-        me_code = m['products'].get(prod_code_val, prod_code_val)
-        p_name = m['names'].get(prod_code_val, row.get('상품명', ''))
+        p_code = str(row.get('상품코드', '')).strip()
+        me_code = m['products'].get(p_code, p_code)
+        p_name = m['names'].get(p_code, str(row.get('상품명', '')))
 
         final_data.append({
             '수주일자': datetime.now().strftime('%Y%m%d'),
-            '납품일자': delivery_date,
+            '납품일자': format_delivery_date(row.get('센터입하일자', '')),
             '발주처코드': CHANNELS[ch]['code'],
-            '발주처': CHANNELS[ch]['name'],
+            '발주처': CHANNELS[ch]['name'],  # 요청하신 대로 발주처 컬럼에 채널명 표시
             '배송코드': d_code,
             '배송지': d_place,
             '상품코드': me_code,
@@ -37,18 +102,29 @@
             'UNIT단가': pd.to_numeric(row.get('발주원가', 0), errors='coerce')
         })
 
-    # 데이터프레임 생성
-    df_total = pd.DataFrame(final_data)
-    
-    # [중요] group_cols 리스트가 df_total의 컬럼명과 100% 일치해야 함
-    group_cols = ['수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
-    
-    try:
-        # 합산 처리
+    if final_data:
+        df_total = pd.DataFrame(final_data)
+        
+        # 합산 기준 컬럼
+        group_cols = ['수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
+        
+        # 그룹화 및 수량 합산
         df_final = df_total.groupby(group_cols, as_index=False)['UNIT수량'].sum()
         df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
+
+        st.success("✅ 데이터 통합 및 발주처 분류 완료")
+        st.dataframe(df_final, use_container_width=True)
+
+        # 엑셀 다운로드 기능
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_final.to_excel(writer, index=False, sheet_name='통합수주데이터')
         
-        st.success("✅ 발주처별 통합 분류 및 합산 완료")
-        st.dataframe(df_final)
-    except KeyError as e:
-        st.error(f"❌ 그룹화 오류: 데이터프레임에 {e} 컬럼이 없습니다. 데이터 생성 부분을 확인하세요.")
+        st.download_button(
+            label="📥 통합 결과 다운로드 (Excel)",
+            data=output.getvalue(),
+            file_name=f"Integrated_Orders_{datetime.now().strftime('%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.error("처리된 데이터가 없습니다. 업로드한 파일을 확인해주세요.")
