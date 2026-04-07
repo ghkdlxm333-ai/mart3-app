@@ -117,4 +117,30 @@ if status_ok:
                     '배송지': d_place,
                     '상품코드': me_code,
                     '상품명': p_name,
-                    'UNIT수량': pd.
+                    'UNIT수량': pd.to_numeric(row.get('수량', 0), errors='coerce'),
+                    'UNIT단가': pd.to_numeric(row.get('발주원가', 0), errors='coerce')
+                })
+            
+            df_mid = pd.DataFrame(final_data)
+            group_cols = ['수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
+            df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
+            df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
+            
+            # 납품일자 문자열 유지
+            df_final['납품일자'] = df_final['납품일자'].astype(str)
+
+            st.success("✅ 노브랜드(NB) 채널 확장 및 납품일자 고정 완료")
+            st.dataframe(df_final)
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
+            
+            st.download_button(
+                label="📥 최종 파일 다운로드",
+                data=output.getvalue(),
+                file_name=f"Order_Final_{datetime.now().strftime('%m%d')}.xlsx"
+            )
+            
+        except Exception as e:
+            st.error(f"오류 발생: {e}")
