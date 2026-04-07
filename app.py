@@ -40,17 +40,19 @@ def load_master_data(file_path):
         c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
         b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip())) 
         
-        # 2. 제품명 시트 처리 (상품명 매칭 로직 강화)
+        # 2. 제품명 시트 처리 (상품명(기획) 반영)
         prod_sheet = sheet_map.get('제품명')
         p_map, n_map = {}, {}
         if prod_sheet:
             df_prod_raw = pd.read_excel(xls, sheet_name=prod_sheet, dtype=str)
             df_prod_raw.columns = [str(c).strip() for c in df_prod_raw.columns]
             
-            # 정확한 컬럼명 찾기 (상품코드, ME코드, 상품명)
+            # 컬럼명 유연하게 매칭 (상품코드, ME코드, 상품명(기획))
             col_s = next((c for c in df_prod_raw.columns if '상품코드' in c), None)
             col_m = next((c for c in df_prod_raw.columns if 'ME코드' in c), None)
-            col_n = next((c for c in df_prod_raw.columns if '상품명' in c), None)
+            # '상품명(기획)' 우선 탐색, 없으면 '상품명' 탐색
+            col_n = next((c for c in df_prod_raw.columns if '상품명(기획)' in c), 
+                         next((c for c in df_prod_raw.columns if '상품명' in c), None))
             
             for _, p_row in df_prod_raw.iterrows():
                 s_code = str(p_row.get(col_s, '')).strip()
@@ -63,7 +65,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒🟢 이마트 계열 수주 자동화 (최종본)")
+st.title("🛒🟢 이마트 계열 수주 자동화 (상품명 매핑 수정)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -94,7 +96,6 @@ if status_ok:
                 store_raw = str(row.get('점포명', ''))
                 store_upper = store_raw.upper().strip()
                 
-                # [채널 분류 로직]
                 if 'DRY' in store_upper: ch = 'EMART'
                 elif 'NB' in store_upper: ch = 'NOBRAND'
                 elif 'TR' in store_upper: ch = 'TRADERS'
@@ -107,11 +108,16 @@ if status_ok:
                 
                 p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
                 me_code = m['products'].get(p_val, p_val)
-                # 마스터 파일의 상품명 우선, 없으면 원본 유지
-                p_name_final = m['names'].get(p_val, str(row.get('상품명', '')))
+                # 마스터의 '상품명(기획)' 컬럼에서 데이터 추출
+                p_name_master = m['names'].get(p_val)
+                # 마스터에 없거나 nan이면 원본 시트의 상품명 사용
+                if not p_name_master or p_name_master == 'nan':
+                    p_name_final = str(row.get('상품명', ''))
+                else:
+                    p_name_final = p_name_master
 
                 final_data.append({
-                    '구분': 0,  # 무조건 0으로 고정
+                    '구분': 0,
                     '수주일자': datetime.now().strftime('%Y%m%d'),
                     '납품일자': format_delivery_date(row[date_col]) if date_col else datetime.now().strftime('%Y%m%d'),
                     '발주처코드': CHANNELS[ch]['code'],
@@ -125,19 +131,16 @@ if status_ok:
                 })
             
             df_mid = pd.DataFrame(final_data)
-            # 그룹화 기준 (상품명 포함)
             group_cols = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             
-            # [요청사항] 컬럼 순서 지정
+            # 컬럼 순서 재배치
             column_order = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT수량', 'UNIT단가', 'Total Amount']
             df_final = df_final[column_order]
-            
-            # 납품일자 문자열 유지
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success("✅ 상품명 매칭 완료 / 구분 값 0 고정 / 컬럼 순서 정렬 완료")
+            st.success("✅ 상품명(기획) 매핑 및 순서 정렬 완료")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -147,7 +150,7 @@ if status_ok:
             st.download_button(
                 label="📥 최종 파일 다운로드",
                 data=output.getvalue(),
-                file_name=f"Order_Upload_{datetime.now().strftime('%m%d')}.xlsx"
+                file_name=f"Order_Final_{datetime.now().strftime('%m%d')}.xlsx"
             )
             
         except Exception as e:
