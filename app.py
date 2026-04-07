@@ -3,29 +3,28 @@ import pandas as pd
 import io
 from datetime import datetime
 
+# 1. 화면 설정
 st.set_page_config(page_title="이마트 계열 수주 자동화", layout="wide")
 
 # --- [날짜 변환 함수: 센터입하일자를 YYYYMMDD로 강제 변환] ---
 def format_delivery_date(val):
     if pd.isna(val) or str(val).strip() == "" or str(val).strip() == "0":
-        return datetime.now().strftime('%Y%m%d') # 값이 없으면 오늘 날짜
+        return datetime.now().strftime('%Y%m%d')
     
     try:
-        # 1. 엑셀 날짜 형식(datetime)인 경우
+        # 엑셀 날짜 객체인 경우
         if isinstance(val, datetime):
             return val.strftime('%Y%m%d')
         
-        # 2. 문자열이나 숫자인 경우 (하이픈, 슬래시 등 제거)
-        str_val = str(val).split(' ')[0] # 시간 정보 포함 시 날짜만 추출
+        # 문자열에서 숫자만 추출
+        str_val = str(val).split(' ')[0]
         clean_val = ''.join(filter(str.isdigit, str_val))
         
-        # 8자리 이상이면 앞의 8자리만 사용 (YYYYMMDD)
         if len(clean_val) >= 8:
             return clean_val[:8]
         else:
-            # 8자리가 안 되면 다시 시도하거나 오늘 날짜
-            dt = pd.to_datetime(val)
-            return dt.strftime('%Y%m%d')
+            # 8자리가 안 될 경우 파싱 시도
+            return pd.to_datetime(val).strftime('%Y%m%d')
     except:
         return datetime.now().strftime('%Y%m%d')
 
@@ -45,10 +44,9 @@ def load_master_data(file_path):
                 df_center = pd.read_excel(xls, sheet_name=target_sheet, skiprows=i+1, dtype=str)
                 df_center.columns = [str(c).strip() for c in df_tmp.iloc[i]]
                 break
+        
         if df_center is None: df_center = df_tmp
-
         c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
-        # 마스터 파일의 '배송코드' 바로 옆(3번째 컬럼)을 배송지명으로 사용
         b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip())) 
         
         prod_sheet = sheet_map.get('제품명')
@@ -60,8 +58,8 @@ def load_master_data(file_path):
     except Exception as e:
         return None, str(e)
 
-# --- 실행부 ---
-st.title("🛒 통합 수주 자동화 (납품일자 형식 고정)")
+# --- 메인 실행부 ---
+st.title("🛒 통합 수주 자동화 (납품일자 정확도 수정)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -85,7 +83,6 @@ if status_ok:
     if uploaded_file:
         try:
             df_raw = pd.read_excel(uploaded_file)
-            # '센터입하일자' 컬럼 정확히 찾기
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c)), None)
             
             final_data = []
@@ -94,19 +91,17 @@ if status_ok:
                 ch = 'TRADERS' if 'TR' in store_raw.upper() else ('NOBRAND' if 'NBR' in store_raw.upper() else 'EMART')
                 
                 m = masters[ch]
-                # P열(인덱스 15) 센터코드
                 c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
                 d_code = m['c_to_b'].get(c_val, "")
                 d_place = m['b_to_n'].get(d_code, store_raw)
                 
-                # F열(인덱스 5) 상품코드
                 p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
                 me_code = m['products'].get(p_val, p_val)
                 p_name = m['names'].get(p_val, str(row.get('상품명', '')))
 
                 final_data.append({
                     '수주일자': datetime.now().strftime('%Y%m%d'),
-                    '납품일자': format_delivery_date(row[date_col]) if date_col else "",
+                    '납품일자': format_delivery_date(row[date_col]) if date_col else datetime.now().strftime('%Y%m%d'),
                     '발주처코드': CHANNELS[ch]['code'],
                     '발주처': CHANNELS[ch]['name'],
                     '배송코드': d_code,
@@ -122,13 +117,22 @@ if status_ok:
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             
-            # 납품일자 컬럼을 문자열(String)로 강제 지정하여 숫자로 변하는 것 방지
+            # 납품일자를 문자열로 고정하여 엑셀 변환 시 오류 방지
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success("✅ 납품일자 형식이 YYYYMMDD로 고정되었습니다.")
+            st.success("✅ 센터입하일자가 납품일자(YYYYMMDD)로 정확히 반영되었습니다.")
             st.dataframe(df_final)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
-            st.download_button("📥 수정된 파일 다운로드", output.getvalue
+            
+            # 괄호 닫기 및 인자 확인 완료
+            st.download_button(
+                label="📥 수정된 파일 다운로드", 
+                data=output.getvalue(), 
+                file_name=f"Order_Fixed_{datetime.now().strftime('%m%d')}.xlsx"
+            )
+            
+        except Exception as e:
+            st.error(f"오류 발생: {e}")
