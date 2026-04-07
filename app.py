@@ -6,24 +6,24 @@ from datetime import datetime
 # 1. 화면 설정
 st.set_page_config(page_title="이마트 계열 수주 자동화", layout="wide")
 
-# --- [날짜 변환 함수: 센터입하일자를 YYYYMMDD로 강제 변환] ---
+# --- [날짜 변환 함수: YYYYMMDD 강제 고정] ---
 def format_delivery_date(val):
-    if pd.isna(val) or str(val).strip() == "" or str(val).strip() == "0":
+    if pd.isna(val) or str(val).strip() in ["", "0", "nan"]:
         return datetime.now().strftime('%Y%m%d')
     
     try:
-        # 엑셀 날짜 객체인 경우
+        # 엑셀 날짜 객체 처리
         if isinstance(val, datetime):
             return val.strftime('%Y%m%d')
         
-        # 문자열에서 숫자만 추출
+        # 문자열 내 숫자만 추출
         str_val = str(val).split(' ')[0]
         clean_val = ''.join(filter(str.isdigit, str_val))
         
         if len(clean_val) >= 8:
             return clean_val[:8]
         else:
-            # 8자리가 안 될 경우 파싱 시도
+            # 8자리가 아닐 경우 판다스 도구로 재파싱
             return pd.to_datetime(val).strftime('%Y%m%d')
     except:
         return datetime.now().strftime('%Y%m%d')
@@ -59,7 +59,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒 통합 수주 자동화 (납품일자 정확도 수정)")
+st.title("🛒 통합 수주 자동화 (NB 채널 확장)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -83,14 +83,23 @@ if status_ok:
     if uploaded_file:
         try:
             df_raw = pd.read_excel(uploaded_file)
+            # 센터입하일자 컬럼 찾기
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c)), None)
             
             final_data = []
             for _, row in df_raw.iterrows():
                 store_raw = str(row.get('점포명', ''))
-                ch = 'TRADERS' if 'TR' in store_raw.upper() else ('NOBRAND' if 'NBR' in store_raw.upper() else 'EMART')
+                
+                # [채널 분류 로직 수정] NBFC 등 대응을 위해 'NB'로 완화
+                if 'TR' in store_raw.upper():
+                    ch = 'TRADERS'
+                elif 'NB' in store_raw.upper():  # NBR뿐만 아니라 NBFC 등도 포함
+                    ch = 'NOBRAND'
+                else:
+                    ch = 'EMART'
                 
                 m = masters[ch]
+                # P열(15), F열(5) 인덱스 기준 추출
                 c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
                 d_code = m['c_to_b'].get(c_val, "")
                 d_place = m['b_to_n'].get(d_code, store_raw)
@@ -108,31 +117,4 @@ if status_ok:
                     '배송지': d_place,
                     '상품코드': me_code,
                     '상품명': p_name,
-                    'UNIT수량': pd.to_numeric(row.get('수량', 0), errors='coerce'),
-                    'UNIT단가': pd.to_numeric(row.get('발주원가', 0), errors='coerce')
-                })
-            
-            df_mid = pd.DataFrame(final_data)
-            group_cols = ['수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
-            df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
-            df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
-            
-            # 납품일자를 문자열로 고정하여 엑셀 변환 시 오류 방지
-            df_final['납품일자'] = df_final['납품일자'].astype(str)
-
-            st.success("✅ 센터입하일자가 납품일자(YYYYMMDD)로 정확히 반영되었습니다.")
-            st.dataframe(df_final)
-            
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
-            
-            # 괄호 닫기 및 인자 확인 완료
-            st.download_button(
-                label="📥 수정된 파일 다운로드", 
-                data=output.getvalue(), 
-                file_name=f"Order_Fixed_{datetime.now().strftime('%m%d')}.xlsx"
-            )
-            
-        except Exception as e:
-            st.error(f"오류 발생: {e}")
+                    'UNIT수량': pd.
