@@ -6,29 +6,23 @@ from datetime import datetime
 # 1. 화면 설정
 st.set_page_config(page_title="이마트 계열 수주 자동화", page_icon="🟢", layout="wide")
 
-# --- [날짜 변환 함수: YYYYMMDD 형식을 확실하게 보장] ---
+# --- [날짜 변환 함수: 19700101 방지 및 YYYYMMDD 고정] ---
 def format_delivery_date(val):
-    # 값이 없거나 공백, 혹은 0인 경우 처리 (1970년 방지)
-    if pd.isna(val) or str(val).strip() in ["", "0", "nan", "None", "19700101", "1970-01-01"]:
+    if pd.isna(val) or str(val).strip() in ["", "0", "nan", "None", "19700101"]:
         return datetime.now().strftime('%Y%m%d')
     
     try:
-        # 이미 datetime 객체인 경우
         if isinstance(val, datetime):
             return val.strftime('%Y%m%d')
         
-        # 문자열에서 날짜 부분만 추출 (T00:00:00 등 제거)
+        # 문자열 가공 (T00:00:00 제거 및 숫자만 추출)
         str_val = str(val).split(' ')[0].split('T')[0]
-        # 숫자만 추출 (2026-04-07 -> 20260407)
         clean_val = ''.join(filter(str.isdigit, str_val))
         
         if len(clean_val) >= 8:
             return clean_val[:8]
-        
-        # 숫자가 부족하거나 형식이 다를 경우 판다스 표준 변환 시도
         return pd.to_datetime(val).strftime('%Y%m%d')
     except:
-        # 모든 시도가 실패하면 오늘 날짜 반환
         return datetime.now().strftime('%Y%m%d')
 
 @st.cache_data
@@ -62,7 +56,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒🟢 이마트 계열 수주 자동화 (최종 수정본)")
+st.title("🛒🟢 이마트 계열 수주 자동화 (NBR 분류 보강)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -86,38 +80,37 @@ if status_ok:
     if uploaded_file:
         try:
             df_raw = pd.read_excel(uploaded_file)
-            # 센터입하일자 컬럼 찾기 (공백 제거 후 검색)
+            # 센터입하일자 컬럼 찾기
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
             
             final_data = []
             for _, row in df_raw.iterrows():
-                store_raw = str(row.get('점포명', ''))
+                store_name = str(row.get('점포명', '')).upper().strip()
                 
-                # [채널 분류 로직] NBR, NBFC, NB 모두 노브랜드로 인식
-                upper_store = store_raw.upper()
-                if 'TR' in upper_store:
-                    ch = 'TRADERS'
-                elif 'NB' in upper_store:  # NBR, NBFC 포함
+                # [채널 분류 로직: 우선순위 재조정]
+                # 1. NB나 NBR이 포함되면 무조건 노브랜드
+                if 'NB' in store_name:
                     ch = 'NOBRAND'
+                # 2. TR이 포함되면 트레이더스
+                elif 'TR' in store_name:
+                    ch = 'TRADERS'
+                # 3. 나머지는 이마트
                 else:
                     ch = 'EMART'
                 
                 m = masters[ch]
-                # P열(15), F열(5) 인덱스 기준 추출
+                # P열(15): 센터코드, F열(5): 상품코드
                 c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
                 d_code = m['c_to_b'].get(c_val, "")
-                d_place = m['b_to_n'].get(d_code, store_raw)
+                d_place = m['b_to_n'].get(d_code, str(row.get('점포명', '')))
                 
                 p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
                 me_code = m['products'].get(p_val, p_val)
                 p_name = m['names'].get(p_val, str(row.get('상품명', '')))
 
-                # 센터입하일자 값 추출
-                raw_date_val = row[date_col] if date_col else None
-
                 final_data.append({
                     '수주일자': datetime.now().strftime('%Y%m%d'),
-                    '납품일자': format_delivery_date(raw_date_val),
+                    '납품일자': format_delivery_date(row[date_col]) if date_col else datetime.now().strftime('%Y%m%d'),
                     '발주처코드': CHANNELS[ch]['code'],
                     '발주처': CHANNELS[ch]['name'],
                     '배송코드': d_code,
@@ -129,16 +122,14 @@ if status_ok:
                 })
             
             df_mid = pd.DataFrame(final_data)
-            
-            # 수량 합산 기준 컬럼 (UNIT단가가 다른 경우 행을 나누기 위해 포함)
             group_cols = ['수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             
-            # 엑셀 저장 시 형식이 깨지지 않도록 문자열로 강제 고정
+            # 납품일자 문자열 고정
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success("✅ 채널 분류(NB/NBR 통합) 및 납품일자 고정 완료")
+            st.success(f"✅ 총 {len(df_final)}건 처리 완료 (노브랜드/트레이더스 분류 적용)")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -146,11 +137,10 @@ if status_ok:
                 df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
             
             st.download_button(
-                label="📥 최종 파일 다운로드 (Excel)",
+                label="📥 결과 다운로드",
                 data=output.getvalue(),
-                file_name=f"Order_Final_{datetime.now().strftime('%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                file_name=f"Final_Order_{datetime.now().strftime('%m%d')}.xlsx"
             )
             
         except Exception as e:
-            st.error(f"오류 발생: {e}")
+            st.error(f"오류: {e}")
