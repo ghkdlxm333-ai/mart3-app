@@ -59,7 +59,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒🟢 통합 수주 자동화 ")
+st.title("🛒🟢 이마트 계열 수주 자동화 ")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
