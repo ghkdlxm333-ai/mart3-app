@@ -40,7 +40,7 @@ def load_master_data(file_path):
         c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
         b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip())) 
         
-        # 2. 제품명 시트 처리 (상품명(기획) E열 대응)
+        # 2. 제품명 시트 처리 (상품명(기획) 대응)
         prod_sheet = sheet_map.get('제품명')
         p_map, n_map = {}, {}
         if prod_sheet:
@@ -49,7 +49,6 @@ def load_master_data(file_path):
             
             col_s = next((c for c in df_prod_raw.columns if '상품코드' in c), None)
             col_m = next((c for c in df_prod_raw.columns if 'ME코드' in c), None)
-            # '상품명(기획)' 컬럼을 최우선으로 찾음
             col_n = next((c for c in df_prod_raw.columns if '상품명(기획)' in c), 
                          next((c for c in df_prod_raw.columns if '상품명' in c), None))
             
@@ -64,7 +63,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒🟢 이마트 계열 수주 자동화 (업로드일자 고정)")
+st.title("🛒🟢 이마트 계열 수주 자동화 (수주일자 Today 고정)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -90,15 +89,15 @@ if status_ok:
             df_raw = pd.read_excel(uploaded_file)
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
             
-            # **당일 날짜 추출 (파일 업로드 시점)**
-            today_str = datetime.now().strftime('%Y%m%d')
+            # **[핵심 수정]** 코드가 돌아가는 시점의 "오늘 날짜"를 매번 새로 가져옵니다.
+            real_today = datetime.now().strftime('%Y%m%d')
             
             final_data = []
             for _, row in df_raw.iterrows():
                 store_raw = str(row.get('점포명', ''))
                 store_upper = store_raw.upper().strip()
                 
-                # 채널 분류 로직 (DRY센터 우선)
+                # 채널 분류 로직
                 if 'DRY' in store_upper: ch = 'EMART'
                 elif 'NB' in store_upper: ch = 'NOBRAND'
                 elif 'TR' in store_upper: ch = 'TRADERS'
@@ -111,18 +110,14 @@ if status_ok:
                 
                 p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
                 me_code = m['products'].get(p_val, p_val)
-                
-                # 상품명(기획) 매핑 처리
                 p_name_master = m['names'].get(p_val)
-                if not p_name_master or p_name_master == 'nan':
-                    p_name_final = str(row.get('상품명', ''))
-                else:
-                    p_name_final = p_name_master
+                
+                p_name_final = p_name_master if p_name_master and p_name_master != 'nan' else str(row.get('상품명', ''))
 
                 final_data.append({
                     '구분': 0,
-                    '수주일자': today_str, # 당일 날짜로 고정
-                    '납품일자': format_delivery_date(row[date_col]) if date_col else today_str,
+                    '수주일자': real_today, # 변수가 아닌 실시간 당일 날짜 문자열 사용
+                    '납품일자': format_delivery_date(row[date_col]) if date_col else real_today,
                     '발주처코드': CHANNELS[ch]['code'],
                     '발주처': CHANNELS[ch]['name'],
                     '배송코드': d_code,
@@ -138,13 +133,13 @@ if status_ok:
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             
-            # 컬럼 순서 재배치
+            # 컬럼 순서 및 타입 고정
             column_order = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT수량', 'UNIT단가', 'Total Amount']
             df_final = df_final[column_order]
             df_final['수주일자'] = df_final['수주일자'].astype(str)
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success(f"✅ 수주일자 {today_str} 고정 및 상품명 매핑 완료")
+            st.success(f"✅ 오늘 날짜({real_today})로 수주일자가 고정되었습니다.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -152,10 +147,10 @@ if status_ok:
                 df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
             
             st.download_button(
-                label="📥 최종 파일 다운로드",
+                label="📥 결과 다운로드",
                 data=output.getvalue(),
-                file_name=f"Order_Final_{today_str}.xlsx"
+                file_name=f"Order_Upload_{real_today}.xlsx"
             )
             
         except Exception as e:
-            st.error(f"오류 발생: {e}")
+            st.error(f"오류: {e}")
