@@ -62,4 +62,93 @@ def load_master_data(file_path):
     except Exception as e:
         return None, str(e)
 
-# --- 메인
+# --- 메인 실행부 ---
+st.title("🛒🟢 이마트 계열 수주 자동화 (최종본)")
+
+CHANNELS = {
+    'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
+    'NOBRAND': {'name': '노브랜드', 'code': '81010000', 'file': '노브랜드_서식파일_업데이트용.xlsx'},
+    'EMART': {'name': '이마트', 'code': '81010000', 'file': '이마트_서식파일_업데이트용.xlsx'}
+}
+
+masters = {}
+status_ok = True
+for k, v in CHANNELS.items():
+    data, err = load_master_data(v['file'])
+    if err:
+        st.error(f"❌ {v['file']} 확인 필요: {err}")
+        status_ok = False
+    else:
+        masters[k] = data
+
+if status_ok:
+    uploaded_file = st.file_uploader("ORDERS 파일 업로드", type=['xlsx'])
+    
+    if uploaded_file:
+        try:
+            df_raw = pd.read_excel(uploaded_file)
+            date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
+            
+            final_data = []
+            for _, row in df_raw.iterrows():
+                store_raw = str(row.get('점포명', ''))
+                store_upper = store_raw.upper().strip()
+                
+                # [채널 분류 로직]
+                if 'DRY' in store_upper: ch = 'EMART'
+                elif 'NB' in store_upper: ch = 'NOBRAND'
+                elif 'TR' in store_upper: ch = 'TRADERS'
+                else: ch = 'EMART'
+                
+                m = masters[ch]
+                c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
+                d_code = m['c_to_b'].get(c_val, "")
+                d_place = m['b_to_n'].get(d_code, store_raw)
+                
+                p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
+                me_code = m['products'].get(p_val, p_val)
+                # 마스터 파일의 상품명 우선, 없으면 원본 유지
+                p_name_final = m['names'].get(p_val, str(row.get('상품명', '')))
+
+                final_data.append({
+                    '구분': 0,  # 무조건 0으로 고정
+                    '수주일자': datetime.now().strftime('%Y%m%d'),
+                    '납품일자': format_delivery_date(row[date_col]) if date_col else datetime.now().strftime('%Y%m%d'),
+                    '발주처코드': CHANNELS[ch]['code'],
+                    '발주처': CHANNELS[ch]['name'],
+                    '배송코드': d_code,
+                    '배송지': d_place,
+                    '상품코드': me_code,
+                    '상품명': p_name_final,
+                    'UNIT수량': pd.to_numeric(row.get('수량', 0), errors='coerce'),
+                    'UNIT단가': pd.to_numeric(row.get('발주원가', 0), errors='coerce')
+                })
+            
+            df_mid = pd.DataFrame(final_data)
+            # 그룹화 기준 (상품명 포함)
+            group_cols = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
+            df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
+            df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
+            
+            # [요청사항] 컬럼 순서 지정
+            column_order = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT수량', 'UNIT단가', 'Total Amount']
+            df_final = df_final[column_order]
+            
+            # 납품일자 문자열 유지
+            df_final['납품일자'] = df_final['납품일자'].astype(str)
+
+            st.success("✅ 상품명 매칭 완료 / 구분 값 0 고정 / 컬럼 순서 정렬 완료")
+            st.dataframe(df_final, use_container_width=True)
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
+            
+            st.download_button(
+                label="📥 최종 파일 다운로드",
+                data=output.getvalue(),
+                file_name=f"Order_Upload_{datetime.now().strftime('%m%d')}.xlsx"
+            )
+            
+        except Exception as e:
+            st.error(f"오류 발생: {e}")
