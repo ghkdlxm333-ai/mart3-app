@@ -6,7 +6,7 @@ from datetime import datetime
 # 1. 화면 설정
 st.set_page_config(page_title="이마트 계열 수주 자동화", page_icon="🟢", layout="wide")
 
-# --- [날짜 변환 함수: 19700101 방지 및 YYYYMMDD 고정] ---
+# --- [날짜 변환 함수: YYYYMMDD 형식을 확실하게 보장] ---
 def format_delivery_date(val):
     if pd.isna(val) or str(val).strip() in ["", "0", "nan", "None", "19700101"]:
         return datetime.now().strftime('%Y%m%d')
@@ -15,7 +15,7 @@ def format_delivery_date(val):
         if isinstance(val, datetime):
             return val.strftime('%Y%m%d')
         
-        # 문자열 가공 (T00:00:00 제거 및 숫자만 추출)
+        # 문자열에서 날짜 부분만 추출 및 숫자만 남기기
         str_val = str(val).split(' ')[0].split('T')[0]
         clean_val = ''.join(filter(str.isdigit, str_val))
         
@@ -56,7 +56,7 @@ def load_master_data(file_path):
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒🟢 이마트 계열 수주 자동화 (NBR 분류 보강)")
+st.title("🛒🟢 이마트 계열 수주 자동화 (DRY센터 로직 추가)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -80,21 +80,23 @@ if status_ok:
     if uploaded_file:
         try:
             df_raw = pd.read_excel(uploaded_file)
-            # 센터입하일자 컬럼 찾기
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
             
             final_data = []
             for _, row in df_raw.iterrows():
                 store_name = str(row.get('점포명', '')).upper().strip()
                 
-                # [채널 분류 로직: 우선순위 재조정]
-                # 1. NB나 NBR이 포함되면 무조건 노브랜드
-                if 'NB' in store_name:
+                # [채널 분류 로직 수정]
+                # 1. DRY가 포함되면 무조건 이마트 (NB보다 우선순위 높음)
+                if 'DRY' in store_name:
+                    ch = 'EMART'
+                # 2. NB나 NBR이 포함되면 노브랜드
+                elif 'NB' in store_name:
                     ch = 'NOBRAND'
-                # 2. TR이 포함되면 트레이더스
+                # 3. TR이 포함되면 트레이더스
                 elif 'TR' in store_name:
                     ch = 'TRADERS'
-                # 3. 나머지는 이마트
+                # 4. 그 외 이마트
                 else:
                     ch = 'EMART'
                 
@@ -102,6 +104,7 @@ if status_ok:
                 # P열(15): 센터코드, F열(5): 상품코드
                 c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
                 d_code = m['c_to_b'].get(c_val, "")
+                # 배송지는 마스터의 지명을 우선하되 없으면 점포명 유지
                 d_place = m['b_to_n'].get(d_code, str(row.get('점포명', '')))
                 
                 p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
@@ -129,7 +132,7 @@ if status_ok:
             # 납품일자 문자열 고정
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success(f"✅ 총 {len(df_final)}건 처리 완료 (노브랜드/트레이더스 분류 적용)")
+            st.success(f"✅ 분류 완료: DRY센터(이마트), NB/NBR(노브랜드)")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -137,10 +140,10 @@ if status_ok:
                 df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
             
             st.download_button(
-                label="📥 결과 다운로드",
+                label="📥 최종 수정 파일 다운로드",
                 data=output.getvalue(),
-                file_name=f"Final_Order_{datetime.now().strftime('%m%d')}.xlsx"
+                file_name=f"Final_Order_DRY_Fixed_{datetime.now().strftime('%m%d')}.xlsx"
             )
             
         except Exception as e:
-            st.error(f"오류: {e}")
+            st.error(f"오류 발생: {e}")
