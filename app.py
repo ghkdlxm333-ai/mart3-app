@@ -15,7 +15,7 @@ def format_delivery_date(val):
         if isinstance(val, datetime):
             return val.strftime('%Y%m%d')
         
-        # 문자열에서 날짜 부분만 추출 및 숫자만 남기기
+        # 문자열 가공 및 숫자만 남기기
         str_val = str(val).split(' ')[0].split('T')[0]
         clean_val = ''.join(filter(str.isdigit, str_val))
         
@@ -31,6 +31,7 @@ def load_master_data(file_path):
         xls = pd.ExcelFile(file_path)
         sheet_map = {s.strip(): s for s in xls.sheet_names}
         
+        # 1. 배송코드 시트 처리
         target_sheet = sheet_map.get('배송코드')
         if not target_sheet: return None, f"'{file_path}'에 '배송코드' 시트가 없습니다."
         
@@ -46,17 +47,30 @@ def load_master_data(file_path):
         c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
         b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip())) 
         
+        # 2. 제품명 시트 처리 (매칭 범위 확장 및 필터 해제 대응)
         prod_sheet = sheet_map.get('제품명')
-        df_prod = pd.read_excel(xls, sheet_name=prod_sheet, dtype=str) if prod_sheet else None
-        p_map = dict(zip(df_prod['상품코드'].str.strip(), df_prod['ME코드'].str.strip())) if df_prod is not None else {}
-        n_map = dict(zip(df_prod['상품코드'].str.strip(), df_prod.iloc[:, 1].str.strip())) if df_prod is not None else {}
+        p_map, n_map = {}, {}
+        if prod_sheet:
+            df_prod = pd.read_excel(xls, sheet_name=prod_sheet, dtype=str)
+            # 모든 컬럼명에서 공백 제거 후 매칭
+            df_prod.columns = [str(c).strip() for c in df_prod.columns]
+            
+            # 상품코드, ME코드, 상품명 컬럼 위치에 상관없이 매핑 (C:D 범위 포함 전체 탐색)
+            for _, p_row in df_prod.iterrows():
+                s_code = str(p_row.get('상품코드', '')).strip()
+                m_code = str(p_row.get('ME코드', '')).strip()
+                p_name = str(p_row.get('상품명', '')).strip()
+                
+                if s_code and s_code != 'nan':
+                    p_map[s_code] = m_code if m_code != 'nan' else s_code
+                    n_map[s_code] = p_name if p_name != 'nan' else ""
         
         return {'c_to_b': c_to_b, 'b_to_n': b_to_n, 'products': p_map, 'names': n_map}, None
     except Exception as e:
         return None, str(e)
 
 # --- 메인 실행부 ---
-st.title("🛒🟢 이마트 계열 수주 자동화 (DRY센터 로직 추가)")
+st.title("🛒🟢 이마트 계열 수주 자동화 (업데이트 반영)")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
@@ -86,17 +100,13 @@ if status_ok:
             for _, row in df_raw.iterrows():
                 store_name = str(row.get('점포명', '')).upper().strip()
                 
-                # [채널 분류 로직 수정]
-                # 1. DRY가 포함되면 무조건 이마트 (NB보다 우선순위 높음)
+                # [채널 분류 로직: DRY센터 우선 적용]
                 if 'DRY' in store_name:
                     ch = 'EMART'
-                # 2. NB나 NBR이 포함되면 노브랜드
-                elif 'NB' in store_name:
+                elif 'NB' in store_name: # NBR, NBFC 등 포함
                     ch = 'NOBRAND'
-                # 3. TR이 포함되면 트레이더스
                 elif 'TR' in store_name:
                     ch = 'TRADERS'
-                # 4. 그 외 이마트
                 else:
                     ch = 'EMART'
                 
@@ -104,12 +114,12 @@ if status_ok:
                 # P열(15): 센터코드, F열(5): 상품코드
                 c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
                 d_code = m['c_to_b'].get(c_val, "")
-                # 배송지는 마스터의 지명을 우선하되 없으면 점포명 유지
                 d_place = m['b_to_n'].get(d_code, str(row.get('점포명', '')))
                 
                 p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
+                # 확장된 매칭 범위 적용
                 me_code = m['products'].get(p_val, p_val)
-                p_name = m['names'].get(p_val, str(row.get('상품명', '')))
+                p_name_master = m['names'].get(p_val, str(row.get('상품명', '')))
 
                 final_data.append({
                     '수주일자': datetime.now().strftime('%Y%m%d'),
@@ -119,7 +129,7 @@ if status_ok:
                     '배송코드': d_code,
                     '배송지': d_place,
                     '상품코드': me_code,
-                    '상품명': p_name,
+                    '상품명': p_name_master,
                     'UNIT수량': pd.to_numeric(row.get('수량', 0), errors='coerce'),
                     'UNIT단가': pd.to_numeric(row.get('발주원가', 0), errors='coerce')
                 })
@@ -132,7 +142,7 @@ if status_ok:
             # 납품일자 문자열 고정
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success(f"✅ 분류 완료: DRY센터(이마트), NB/NBR(노브랜드)")
+            st.success("✅ 제품명 시트 매칭 범위 확장 및 DRY/NB 분류 로직 적용 완료")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -140,9 +150,9 @@ if status_ok:
                 df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
             
             st.download_button(
-                label="📥 최종 수정 파일 다운로드",
+                label="📥 최종 파일 다운로드",
                 data=output.getvalue(),
-                file_name=f"Final_Order_DRY_Fixed_{datetime.now().strftime('%m%d')}.xlsx"
+                file_name=f"Final_Order_Updated_{datetime.now().strftime('%m%d')}.xlsx"
             )
             
         except Exception as e:
