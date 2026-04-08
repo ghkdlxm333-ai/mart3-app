@@ -148,7 +148,7 @@ if status_ok:
             df_final['수주일자'] = real_today
             df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success(f"✅ 수주일자가 오늘 날짜({real_today})로 고정되어 분석이 완료되었습니다.")
+            st.success(f"✅ 수주일자가 오늘 날짜({real_today})로 분석이 완료되었습니다.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
