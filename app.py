@@ -6,14 +6,6 @@ from datetime import datetime
 # 1. 화면 설정
 st.set_page_config(page_title="이마트 계열 수주 자동화", page_icon="🟢", layout="wide")
 
-if error:
-    st.error(f"마스터 파일 로드 실패: {error}")
-else:
-    # --- [추가된 안내 문구 섹션] ---
-    st.markdown("### ※ 업로드 전 확인사항")
-    st.info("💡 **엑셀파일 확장자를 .xlsx로 변환 후 업로드해주세요.** (xls, csv 파일은 변환이 필요합니다)")
-    # -----------------------------------
-
 # --- [날짜 변환 함수: 납품일자용] ---
 def format_delivery_date(val):
     if pd.isna(val) or str(val).strip() in ["", "0", "nan", "None", "19700101"]:
