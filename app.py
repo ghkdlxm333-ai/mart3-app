@@ -82,7 +82,7 @@ for k, v in CHANNELS.items():
         masters[k] = data
 
 if status_ok:
-    uploaded_file = st.file_uploader("ORDERS 파일 업로드", type=['xlsx'])
+    uploaded_file = st.file_uploader("이마트, 노브랜드, 트레이더스 발주서 취합 파일로 업로드해주세요.", type=['xlsx'])
     
     if uploaded_file:
         try:
