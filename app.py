@@ -156,7 +156,7 @@ if status_ok:
                 df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
             
             st.download_button(
-                label="📥 최종 결과 다운로드",
+                label="📥 결과 다운로드",
                 data=output.getvalue(),
                 file_name=f"Order_Upload_TODAY_{real_today}.xlsx"
             )
