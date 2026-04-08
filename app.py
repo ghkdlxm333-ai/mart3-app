@@ -3,132 +3,163 @@ import pandas as pd
 import io
 from datetime import datetime
 
-# --- [날짜 변환 함수] ---
-def format_to_yyyymmdd(val):
-    if pd.isna(val) or str(val).strip() == "":
+# 1. 화면 설정
+st.set_page_config(page_title="이마트 계열 수주 자동화", page_icon="🟢", layout="wide")
+
+# --- [날짜 변환 함수: 납품일자용] ---
+def format_delivery_date(val):
+    if pd.isna(val) or str(val).strip() in ["", "0", "nan", "None", "19700101"]:
         return datetime.now().strftime('%Y%m%d')
     try:
-        # datetime 객체나 하이픈(-) 포함 문자열 처리
-        dt = pd.to_datetime(val)
-        return dt.strftime('%Y%m%d')
+        if isinstance(val, datetime):
+            return val.strftime('%Y%m%d')
+        str_val = str(val).split(' ')[0].split('T')[0]
+        clean_val = ''.join(filter(str.isdigit, str_val))
+        if len(clean_val) >= 8:
+            return clean_val[:8]
+        return pd.to_datetime(val).strftime('%Y%m%d')
     except:
-        # 숫자만 남기고 8자리 추출
-        clean_val = ''.join(filter(str.isdigit, str(val)))
-        return clean_val[:8] if len(clean_val) >= 8 else datetime.now().strftime('%Y%m%d')
+        return datetime.now().strftime('%Y%m%d')
 
 @st.cache_data
 def load_master_data(file_path):
-    """시트명 '배송코드' 및 '제품명' 로드 (헤더 위치 자동 보정)"""
     try:
         xls = pd.ExcelFile(file_path)
         sheet_map = {s.strip(): s for s in xls.sheet_names}
         
-        # 1. 배송코드 시트 로드
+        # 1. 배송코드 시트 처리
         target_sheet = sheet_map.get('배송코드')
-        if not target_sheet:
-            return None, f"'{file_path}'에 '배송코드' 시트가 없습니다."
-        
         df_tmp = pd.read_excel(xls, sheet_name=target_sheet, dtype=str)
-        df_center = df_tmp
-        # '배송코드'나 '센터코드'라는 글자가 있는 행을 찾아 헤더로 설정
+        df_center = None
         for i, row in df_tmp.iterrows():
-            row_values = [str(v).strip() for v in row.values]
-            if '배송코드' in row_values or '센터코드' in row_values:
+            if '배송코드' in [str(v).strip() for v in row.values]:
                 df_center = pd.read_excel(xls, sheet_name=target_sheet, skiprows=i+1, dtype=str)
                 df_center.columns = [str(c).strip() for c in df_tmp.iloc[i]]
                 break
+        if df_center is None: df_center = df_tmp
+        c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
+        b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip())) 
         
-        # 2. 제품명 시트 로드
+        # 2. 제품명 시트 처리 (상품명(기획) E열 대응 로직)
         prod_sheet = sheet_map.get('제품명')
-        df_prod = pd.read_excel(xls, sheet_name=prod_sheet, dtype=str) if prod_sheet else None
+        p_map, n_map = {}, {}
+        if prod_sheet:
+            df_prod_raw = pd.read_excel(xls, sheet_name=prod_sheet, dtype=str)
+            df_prod_raw.columns = [str(c).strip() for c in df_prod_raw.columns]
+            
+            col_s = next((c for c in df_prod_raw.columns if '상품코드' in c), None)
+            col_m = next((c for c in df_prod_raw.columns if 'ME코드' in c), None)
+            # [추가로직] '상품명(기획)' 컬럼을 최우선으로 찾고, 없으면 '상품명' 사용
+            col_n = next((c for c in df_prod_raw.columns if '상품명(기획)' in c), 
+                         next((c for c in df_prod_raw.columns if '상품명' in c), None))
+            
+            for _, p_row in df_prod_raw.iterrows():
+                s_code = str(p_row.get(col_s, '')).strip()
+                if s_code and s_code != 'nan':
+                    p_map[s_code] = str(p_row.get(col_m, s_code)).strip()
+                    n_map[s_code] = str(p_row.get(col_n, '')).strip()
         
-        # 매핑 생성
-        c_map = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
-        p_map = dict(zip(df_prod['상품코드'].str.strip(), df_prod['ME코드'].str.strip())) if df_prod is not None else {}
-        n_map = dict(zip(df_prod['상품코드'].str.strip(), df_prod.iloc[:, 1].str.strip())) if df_prod is not None else {}
-        
-        return {'centers': c_map, 'products': p_map, 'names': n_map}, None
+        return {'c_to_b': c_to_b, 'b_to_n': b_to_n, 'products': p_map, 'names': n_map}, None
     except Exception as e:
         return None, str(e)
 
-# --- 메인 앱 ---
-st.title("🛒 통합 수주 자동화 (센터입하일자 기준)")
+# --- 메인 실행부 ---
+st.title("🛒🟢 이마트 계열 수주 자동화")
 
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
-    'NOBRAND': {'name': '이마트', 'code': '81010000', 'file': '노브랜드_서식파일_업데이트용.xlsx'},
+    'NOBRAND': {'name': '노브랜드', 'code': '81010000', 'file': '노브랜드_서식파일_업데이트용.xlsx'},
     'EMART': {'name': '이마트', 'code': '81010000', 'file': '이마트_서식파일_업데이트용.xlsx'}
 }
 
-# 마스터 로드
 masters = {}
-is_ok = True
+status_ok = True
 for k, v in CHANNELS.items():
     data, err = load_master_data(v['file'])
     if err:
-        st.error(f"❌ {v['file']} 파일 확인 필요: {err}")
-        is_ok = False
+        st.error(f"❌ {v['file']} 확인 필요: {err}")
+        status_ok = False
     else:
         masters[k] = data
 
-if is_ok:
-    uploaded_file = st.file_uploader("일반 주문서(Raw Data) 업로드", type=['xlsx'])
+if status_ok:
+    # --- [추가로직 1] 안내 문구 구간 ---
+    st.markdown("### ※ 업로드 전 확인사항")
+    st.info("💡 **엑셀파일 확장자를 .xlsx로 변환 후 업로드해주세요.** (xls, csv 파일은 변환이 필요합니다)")
+    st.divider() 
+    # -------------------------------
+
+    uploaded_file = st.file_uploader("이마트, 노브랜드, 트레이더스 발주서 취합 파일로 업로드해주세요.", type=['xlsx'])
     
     if uploaded_file:
         try:
             df_raw = pd.read_excel(uploaded_file)
+            date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
             
-            # [수정] 납품일자 대용으로 '센터입하일자' 사용
-            # 만약 센터입하일자 컬럼도 없으면 점입점일자나 발주일자를 찾음
-            date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c) or '납품일자' in str(c)), None)
-            if not date_col:
-                date_col = next((c for c in df_raw.columns if '점입점일자' in str(c) or '발주일자' in str(c)), df_raw.columns[0])
-
-            final_list = []
+            # --- [추가로직 2] 수주일자 TODAY 강제 고정 ---
+            real_today = datetime.now().strftime('%Y%m%d')
+            
+            final_data = []
             for _, row in df_raw.iterrows():
-                store = str(row['점포명'])
-                ch = 'EMART'
-                if 'TR' in store.upper(): ch = 'TRADERS'
-                elif 'NBR' in store.upper(): ch = 'NOBRAND'
+                store_raw = str(row.get('점포명', ''))
+                store_upper = store_raw.upper().strip()
                 
-                # P열(15번 인덱스) -> 센터코드 매칭
-                raw_c = str(row.iloc[15]).strip()
-                delivery_code = masters[ch]['centers'].get(raw_c, "")
+                if 'DRY' in store_upper: ch = 'EMART'
+                elif 'NB' in store_upper: ch = 'NOBRAND'
+                elif 'TR' in store_upper: ch = 'TRADERS'
+                else: ch = 'EMART'
                 
-                # F열(5번 인덱스) -> 상품코드 매칭
-                raw_p = str(row.iloc[5]).strip()
-                me_code = masters[ch]['products'].get(raw_p, raw_p)
-                p_name = masters[ch]['names'].get(raw_p, row['상품명'])
+                m = masters[ch]
+                c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
+                d_code = m['c_to_b'].get(c_val, "")
+                d_place = m['b_to_n'].get(d_code, store_raw)
                 
-                final_list.append({
-                    '수주일자': datetime.now().strftime('%Y%m%d'),
-                    '납품일자': format_to_yyyymmdd(row[date_col]),
+                p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
+                me_code = m['products'].get(p_val, p_val)
+                
+                # --- [추가로직 3] 상품명(기획) 매핑 ---
+                p_name_master = m['names'].get(p_val)
+                p_name_final = p_name_master if p_name_master and p_name_master != 'nan' else str(row.get('상품명', ''))
+
+                final_data.append({
+                    '구분': 0, # [추가로직] 구분 값 0 고정
+                    '수주일자': real_today, # 오늘 날짜 강제 주입
+                    '납품일자': format_delivery_date(row[date_col]) if date_col else real_today,
                     '발주처코드': CHANNELS[ch]['code'],
                     '발주처': CHANNELS[ch]['name'],
-                    '배송코드': delivery_code,
-                    '배송지': store,
+                    '배송코드': d_code,
+                    '배송지': d_place,
                     '상품코드': me_code,
-                    '상품명': p_name,
-                    'UNIT수량': pd.to_numeric(row['수량'], errors='coerce'),
-                    'UNIT단가': pd.to_numeric(row['발주원가'], errors='coerce')
+                    '상품명': p_name_final,
+                    'UNIT수량': pd.to_numeric(row.get('수량', 0), errors='coerce'),
+                    'UNIT단가': pd.to_numeric(row.get('발주원가', 0), errors='coerce')
                 })
             
-            df_processed = pd.DataFrame(final_list)
-            
-            # --- [동일 배송지/상품 수량 합산] ---
-            group_keys = ['수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
-            df_final = df_processed.groupby(group_keys, as_index=False)['UNIT수량'].sum()
+            df_mid = pd.DataFrame(final_data)
+            group_cols = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
+            df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             
-            st.success(f"✅ 분석 완료 (기준 컬럼: {date_col})")
-            st.dataframe(df_final)
+            # [추가로직] 컬럼 순서 12개 고정
+            column_order = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT수량', 'UNIT단가', 'Total Amount']
+            df_final = df_final[column_order]
             
-            # 엑셀 다운로드
+            # 데이터 최종 보정 (수주일자 재확인)
+            df_final['수주일자'] = real_today
+            df_final['납품일자'] = df_final['납품일자'].astype(str)
+
+            st.success(f"✅ 수주일자가 오늘 날짜({real_today})로 고정되어 분석이 완료되었습니다.")
+            st.dataframe(df_final, use_container_width=True)
+            
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='Summary')
+                df_final.to_excel(writer, index=False, sheet_name='수주업로드용')
             
-            st.download_button("📥 통합 주문서 다운로드", output.getvalue(), f"Order_{datetime.now().strftime('%m%d')}.xlsx")
+            st.download_button(
+                label="📥 최종 결과 다운로드",
+                data=output.getvalue(),
+                file_name=f"Order_Upload_TODAY_{real_today}.xlsx"
+            )
             
         except Exception as e:
-            st.error(f"데이터 처리 중 오류: {e}")
+            st.error(f"오류 발생: {e}")
