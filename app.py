@@ -65,6 +65,14 @@ def load_master_data(file_path):
 # --- 메인 실행부 ---
 st.title("🛒🟢 이마트 계열 수주 자동화")
 
+if error:
+    st.error(f"마스터 파일 로드 실패: {error}")
+else:
+    # --- 안내 문구 추가 구간 ---
+    st.markdown("### ※ 업로드 전 확인사항")
+    st.info("💡 **엑셀파일 확장자를 .xlsx로 변환 후 업로드해주세요.** (xls, csv 파일은 변환이 필요합니다)")
+    # -----------------------
+
 CHANNELS = {
     'TRADERS': {'name': '이마트 트레이더스', 'code': '81011010', 'file': '트레이더스_서식파일_업데이트용.xlsx'},
     'NOBRAND': {'name': '노브랜드', 'code': '81010000', 'file': '노브랜드_서식파일_업데이트용.xlsx'},
