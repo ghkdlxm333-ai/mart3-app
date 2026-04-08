@@ -82,6 +82,14 @@ for k, v in CHANNELS.items():
         masters[k] = data
 
 if status_ok:
+    # --- 안내 문구 추가 구간 ---
+    st.markdown("### ※ 업로드 전 확인사항")
+    st.info("💡 **엑셀파일 확장자를 .xlsx로 변환 후 업로드해주세요.** (xls, csv 파일은 변환이 필요합니다)")
+    
+    # 시각적 구분을 위한 선 추가 (선택 사항)
+    st.divider() 
+    # -----------------------
+    
     uploaded_file = st.file_uploader("이마트, 노브랜드, 트레이더스 발주서 취합 파일로 업로드해주세요.", type=['xlsx'])
     
     if uploaded_file:
