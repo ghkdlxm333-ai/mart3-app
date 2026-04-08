@@ -89,8 +89,7 @@ if status_ok:
     # 시각적 구분을 위한 선 추가 (선택 사항)
     st.divider() 
     # -----------------------
-    
-    uploaded_file = st.file_uploader("이마트, 노브랜드, 트레이더스 발주서 취합 파일로 업로드해주세요.", type=['xlsx'])
+        uploaded_file = st.file_uploader("이마트, 노브랜드, 트레이더스 발주서 취합 파일로 업로드해주세요.", type=['xlsx'])
     
     if uploaded_file:
         try:
