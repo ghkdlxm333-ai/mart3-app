@@ -136,6 +136,11 @@ if status_ok:
                 })
             
             df_mid = pd.DataFrame(final_data)
+
+            # [수정 포인트 4] 그룹화 기준 컬럼에서 혹시 모를 '수주일자' 혼선을 막기 위해 
+            # 그룹화 직전에 날짜를 다시 한번 강제 고정
+            df_mid['수주일자'] = real_today
+            
             group_cols = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
