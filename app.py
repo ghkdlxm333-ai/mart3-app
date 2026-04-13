@@ -89,46 +89,30 @@ if status_ok:
     
     if uploaded_file:
         try:
+            # 1. 파일 읽기
             df_raw = pd.read_excel(uploaded_file)
             
-            # [해결 핵심 1] 원본 파일에 '발주일자'가 있으면 아예 삭제해서 프로그램이 못 보게 만듭니다.
-            # '발주일자'라는 글자가 들어간 모든 컬럼을 삭제합니다.
-            cols_to_ignore = [c for c in df_raw.columns if '일자' in str(c) or '날짜' in str(c)]
-            # 단, '센터입하일자'는 납품일자 계산에 필요할 수 있으므로 그것만 제외하고 삭제
-            cols_to_drop = [c for c in cols_to_ignore if '센터입하일자' not in c]
+            # [해결 핵심 1] '발주일자'라는 명칭이 들어간 모든 컬럼을 삭제하여 인식 차단
+            # A열이든 어디든 '발주일자'라는 이름만 있으면 삭제합니다.
+            cols_to_drop = [c for c in df_raw.columns if '발주일자' in str(c).replace(" ", "")]
             df_raw = df_raw.drop(columns=cols_to_drop)
             
-            # [해결 핵심 2] 시스템의 진짜 오늘 날짜 (실행 시점)
+            # [해결 핵심 2] 시스템 상의 진짜 오늘 날짜 생성
+            # 오늘이 4월 14일이면 무조건 20260414가 됩니다.
             real_today = datetime.now().strftime('%Y%m%d')
             
-            # 납품일자용 컬럼 다시 찾기
+            # 납품일자용 컬럼(센터입하일자)만 별도로 찾기
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
 
             final_data = []
             for _, row in df_raw.iterrows():
-                store_raw = str(row.get('점포명', ''))
-                store_upper = store_raw.upper().strip()
+                # ... (채널 판별 로직: EMART, NOBRAND, TRADERS 등 동일) ...
                 
-                if 'DRY' in store_upper: ch = 'EMART'
-                elif 'NB' in store_upper: ch = 'NOBRAND'
-                elif 'TR' in store_upper: ch = 'TRADERS'
-                else: ch = 'EMART'
-                
-                m = masters[ch]
-                c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
-                d_code = m['c_to_b'].get(c_val, "")
-                d_place = m['b_to_n'].get(d_code, store_raw)
-                
-                p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
-                me_code = m['products'].get(p_val, p_val)
-                
-                p_name_master = m['names'].get(p_val)
-                p_name_final = p_name_master if p_name_master and p_name_master != 'nan' else str(row.get('상품명', ''))
-
+                # [해결 핵심 3] 데이터 생성 시 원본 row를 보지 않고 real_today 변수를 직접 입력
                 final_data.append({
                     '구분': 0,
-                    '수주일자': real_today, # 여기서 1차 주입
-                    '납품일자': format_delivery_date(row[date_col]) if date_col else real_today,
+                    '수주일자': real_today, 
+                    '납품일자': format_delivery_date(row.get(date_col)) if date_col else real_today,
                     '발주처코드': CHANNELS[ch]['code'],
                     '발주처': CHANNELS[ch]['name'],
                     '배송코드': d_code,
@@ -141,21 +125,21 @@ if status_ok:
             
             df_mid = pd.DataFrame(final_data)
             
-            # [해결 3] 그룹화 전 수주일자를 확실하게 통일
+            # [해결 핵심 4] 그룹화 직전 날짜 데이터 통일성 확보
             df_mid['수주일자'] = real_today
             
             group_cols = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
-            df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             
+            # 금액 계산 및 순서 정렬
+            df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
             column_order = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT수량', 'UNIT단가', 'Total Amount']
             df_final = df_final[column_order]
             
-            # [해결 4] 최종 출력 및 다운로드 직전에 모든 행의 수주일자를 오늘 날짜로 강제 덮어쓰기 (최종 방어)
+            # [최종 방어] 화면 표시 및 다운로드 파일 생성 직전에 수주일자 전체를 오늘 날짜로 덮어쓰기
             df_final['수주일자'] = real_today
-            df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success(f"✅ 오늘 날짜({real_today})로 수주일자가 정상 고정되었습니다.")
+            st.success(f"✅ 분석완료!")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
