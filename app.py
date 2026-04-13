@@ -40,7 +40,7 @@ def load_master_data(file_path):
         c_to_b = dict(zip(df_center['센터코드'].str.strip(), df_center['배송코드'].str.strip()))
         b_to_n = dict(zip(df_center['배송코드'].str.strip(), df_center.iloc[:, 2].str.strip())) 
         
-        # 2. 제품명 시트 처리
+        # 2. 제품명 시트 처리 (상품명(기획) E열 대응 로직)
         prod_sheet = sheet_map.get('제품명')
         p_map, n_map = {}, {}
         if prod_sheet:
@@ -49,6 +49,7 @@ def load_master_data(file_path):
             
             col_s = next((c for c in df_prod_raw.columns if '상품코드' in c), None)
             col_m = next((c for c in df_prod_raw.columns if 'ME코드' in c), None)
+            # [추가로직] '상품명(기획)' 컬럼을 최우선으로 찾고, 없으면 '상품명' 사용
             col_n = next((c for c in df_prod_raw.columns if '상품명(기획)' in c), 
                          next((c for c in df_prod_raw.columns if '상품명' in c), None))
             
@@ -82,37 +83,48 @@ for k, v in CHANNELS.items():
         masters[k] = data
 
 if status_ok:
+    # --- [추가로직 1] 안내 문구 구간 ---
     st.markdown("### ※ 업로드 전 확인사항")
     st.info("💡 **엑셀파일 확장자를 .xlsx로 변환 후 업로드해주세요.** (xls, csv 파일은 변환이 필요합니다)")
+    
+    # -------------------------------
 
     uploaded_file = st.file_uploader("이마트, 노브랜드, 트레이더스 발주서 취합 파일로 업로드해주세요.", type=['xlsx'])
     
     if uploaded_file:
         try:
-            # 1. 파일 읽기
             df_raw = pd.read_excel(uploaded_file)
-            
-            # [해결 핵심 1] '발주일자'라는 명칭이 들어간 모든 컬럼을 삭제하여 인식 차단
-            # A열이든 어디든 '발주일자'라는 이름만 있으면 삭제합니다.
-            cols_to_drop = [c for c in df_raw.columns if '발주일자' in str(c).replace(" ", "")]
-            df_raw = df_raw.drop(columns=cols_to_drop)
-            
-            # [해결 핵심 2] 시스템 상의 진짜 오늘 날짜 생성
-            # 오늘이 4월 14일이면 무조건 20260414가 됩니다.
-            real_today = datetime.now().strftime('%Y%m%d')
-            
-            # 납품일자용 컬럼(센터입하일자)만 별도로 찾기
             date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
+            
+            # --- [추가로직 2] 수주일자 TODAY 강제 고정 ---
+            real_today = datetime.now().strftime('%Y%m%d')
 
             final_data = []
             for _, row in df_raw.iterrows():
-                # ... (채널 판별 로직: EMART, NOBRAND, TRADERS 등 동일) ...
+                store_raw = str(row.get('점포명', ''))
+                store_upper = store_raw.upper().strip()
                 
-                # [해결 핵심 3] 데이터 생성 시 원본 row를 보지 않고 real_today 변수를 직접 입력
+                if 'DRY' in store_upper: ch = 'EMART'
+                elif 'NB' in store_upper: ch = 'NOBRAND'
+                elif 'TR' in store_upper: ch = 'TRADERS'
+                else: ch = 'EMART'
+                
+                m = masters[ch]
+                c_val = str(row.iloc[15]).strip() if len(row) > 15 else ""
+                d_code = m['c_to_b'].get(c_val, "")
+                d_place = m['b_to_n'].get(d_code, store_raw)
+                
+                p_val = str(row.iloc[5]).strip() if len(row) > 5 else ""
+                me_code = m['products'].get(p_val, p_val)
+                
+                # --- [추가로직 3] 상품명(기획) 매핑 ---
+                p_name_master = m['names'].get(p_val)
+                p_name_final = p_name_master if p_name_master and p_name_master != 'nan' else str(row.get('상품명', ''))
+
                 final_data.append({
-                    '구분': 0,
-                    '수주일자': real_today, 
-                    '납품일자': format_delivery_date(row.get(date_col)) if date_col else real_today,
+                    '구분': 0, # [추가로직] 구분 값 0 고정
+                    '수주일자': real_today, # 오늘 날짜 강제 주입
+                    '납품일자': format_delivery_date(row[date_col]) if date_col else real_today,
                     '발주처코드': CHANNELS[ch]['code'],
                     '발주처': CHANNELS[ch]['name'],
                     '배송코드': d_code,
@@ -124,22 +136,24 @@ if status_ok:
                 })
             
             df_mid = pd.DataFrame(final_data)
-            
-            # [해결 핵심 4] 그룹화 직전 날짜 데이터 통일성 확보
+
+            # [수정 포인트 4] 그룹화 기준 컬럼에서 혹시 모를 '수주일자' 혼선을 막기 위해 
+            # 그룹화 직전에 날짜를 다시 한번 강제 고정
             df_mid['수주일자'] = real_today
             
             group_cols = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT단가']
             df_final = df_mid.groupby(group_cols, as_index=False)['UNIT수량'].sum()
-            
-            # 금액 계산 및 순서 정렬
             df_final['Total Amount'] = df_final['UNIT수량'] * df_final['UNIT단가']
+            
+            # [추가로직] 컬럼 순서 12개 고정
             column_order = ['구분', '수주일자', '납품일자', '발주처코드', '발주처', '배송코드', '배송지', '상품코드', '상품명', 'UNIT수량', 'UNIT단가', 'Total Amount']
             df_final = df_final[column_order]
             
-            # [최종 방어] 화면 표시 및 다운로드 파일 생성 직전에 수주일자 전체를 오늘 날짜로 덮어쓰기
+            # 데이터 최종 보정 (수주일자 재확인)
             df_final['수주일자'] = real_today
+            df_final['납품일자'] = df_final['납품일자'].astype(str)
 
-            st.success(f"✅ 분석완료!")
+            st.success(f"✅ 분석 완료!")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
