@@ -99,10 +99,6 @@ if status_ok:
             # --- [추가로직 2] 수주일자 TODAY 강제 고정 ---
             real_today = datetime.now().strftime('%Y%m%d')
 
-            # [추가] 만약 원본에 '발주일자'나 '수주일자' 컬럼이 있다면 아예 삭제하고 시작 (인식 차단)
-            cols_to_drop = ['발주일자', '수주일자', '발주 일자', '수주 일자']
-            df_raw = df_raw.drop(columns=[c for c in cols_to_drop if c in df_raw.columns])
-            
             final_data = []
             for _, row in df_raw.iterrows():
                 store_raw = str(row.get('점포명', ''))
