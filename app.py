@@ -91,14 +91,18 @@ if status_ok:
         try:
             df_raw = pd.read_excel(uploaded_file)
             
-            # [해결 1] 원본 파일에 '수주일자'나 '발주일자'가 있으면 아예 삭제하여 간섭 차단
-            ignore_cols = ['수주일자', '발주일자', '수주 일자', '발주 일자']
-            df_raw = df_raw.drop(columns=[c for c in ignore_cols if c in df_raw.columns])
+            # [해결 핵심 1] 원본 파일에 '발주일자'가 있으면 아예 삭제해서 프로그램이 못 보게 만듭니다.
+            # '발주일자'라는 글자가 들어간 모든 컬럼을 삭제합니다.
+            cols_to_ignore = [c for c in df_raw.columns if '일자' in str(c) or '날짜' in str(c)]
+            # 단, '센터입하일자'는 납품일자 계산에 필요할 수 있으므로 그것만 제외하고 삭제
+            cols_to_drop = [c for c in cols_to_ignore if '센터입하일자' not in c]
+            df_raw = df_raw.drop(columns=cols_to_drop)
             
-            date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
-            
-            # [해결 2] 진짜 오늘 날짜 생성
+            # [해결 핵심 2] 시스템의 진짜 오늘 날짜 (실행 시점)
             real_today = datetime.now().strftime('%Y%m%d')
+            
+            # 납품일자용 컬럼 다시 찾기
+            date_col = next((c for c in df_raw.columns if '센터입하일자' in str(c).replace(" ", "")), None)
 
             final_data = []
             for _, row in df_raw.iterrows():
